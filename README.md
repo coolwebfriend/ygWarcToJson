@@ -7,7 +7,7 @@ I was doing some research on a Yahoo Group called videoblogging.
 Thankfully Archive Team backed up all the posts from the group.
 But the archive, in WARC format, only contained JSON from the Groups API. 
 No navigable hierarchy or forum interface. Just a bunch of JSON objects, 
-two per post (and "info" object and a "raw" object). Not very readable :(
+two per post (an "info" object and a "raw" object). Not very readable :(
 
 The first step towards rebuilding a readable, navigable version of the group
 is to ditch the WARC format headers and marry the "info" and "raw" JSON
