@@ -1,4 +1,4 @@
-# ygWarcToJson
+# ygWarcToJson.py
 Creates JSON from WARC'd Yahoo Groups API response data. 
 This should make the data easier to display dynamically on a webpage later. 
 
