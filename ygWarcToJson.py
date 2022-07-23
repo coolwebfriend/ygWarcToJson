@@ -203,7 +203,7 @@ def ygWarcToJson(input_path, export_posts, export_threads, export_roster):
 def main():
     
     # Options
-    input_path = "./assets/june2004throughfeb2006.warc"
+    input_path = "./videoblogging.warc"
     export_posts = True
     export_threads = True
     export_roster = True
