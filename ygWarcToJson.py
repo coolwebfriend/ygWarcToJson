@@ -1,106 +1,177 @@
 #=============================================================================#
+#=============================================================================#
+#
 #        Creates JSON file from WARC'd Yahoo Groups API response data.
 #  This should make the data easier to display dynamically on a webpage later. 
 #
 #  Anthony D'Angelo | http://heythats.cool | https://github.com/coolwebfriend
+#  Josh Gillner | https://github.com/jgillner
 #
+#
+#=============================================================================#
 #=============================================================================#
 
 import os
 import json
 import html
+
 import urllib
 from urllib.parse import urlparse
+
+import email
+from email import message, parser
+
 import warcio
 from warcio.archiveiterator import ArchiveIterator
-         
-def ygWarcToJson(input_path):
-    # Return a dictionary containing metadata and payloads of each WARC record.
+
+#=============================================================================#
+
+def parse_records(stream):
+    # Returns array of dicts containing data for next steps.
+    print(f"Parsing WARC records...")
+    records_array = []
+    for record in ArchiveIterator(stream):
+        uri = urlparse(record.rec_headers.get_header('WARC-Target-URI'))
+        path = uri.path
+        if "info" in path[-5:]: 
+            suffix = "info"
+        elif "raw" in path[-5:]: 
+            suffix = "raw"
+        else: suffix = "error"
+        pn_index = path.index("message/")+len("message/")
+        pn = path[pn_index:path.index(suffix)-1]
+        gn_index = path.index("group/")+len("group/")
+        gn = path[gn_index:path.index("message/")-1]
+
+        thisRecord = {
+            "uri":uri,
+            "suffix":suffix,
+            "post_number":pn,
+            "payload":json.loads(record.raw_stream.read())
+        }
+        records_array.append(thisRecord)
+    print(f"Parsed {len(records_array)} records!")
+    return records_array
+
+#=============================================================================#
+
+def marry_records(records_arr, limit = -1):
+    #Returns list of dicts containing both "info" and "raw" metadata for each post
     
+    print(f"Marrying {len(records_arr[0:limit])} records... (this step can take some time)")
+
+    unique_messages = list(set(map(lambda r: r["post_number"], records_arr[0:limit])))
+
+    married = []
+    
+    for msgId in unique_messages:
+        entry = {
+            "post_number":msgId,
+            "topic_id":"",
+            "body":"",
+            "info":"",
+            "raw":""
+        }
+        for record in records_arr:
+            if record["post_number"] == msgId:
+                if record["suffix"] == "raw":
+                    entry["raw"] = record["payload"]
+                if record["suffix"] == "info":
+                    entry["info"] = record["payload"]
+        married.append(entry)
+    
+    for m in married:
+        #Clean up the email blob
+        email_blob = email.message_from_string(html.unescape(m["raw"]["rawEmail"]))
+        if email_blob.is_multipart():
+            # If the email is multipart, get the payload from the first part
+            m["body"] = str(email_blob.get_payload()[0].get_payload())
+        else:
+            m["body"] = str(email_blob.get_payload())
+
+    print(f"Marriage complete, made {len(married)} posts")
+    return married
+                    
+#=============================================================================#
+
+def get_roster(posts):
+    roster = []
+    print("Generating roster...")
+    unique_author_tuples = list(set(map(lambda p: str(p["raw"]["userId"]) +\
+                                        "~$$$~" + p["raw"]["authorName"], posts)))
+
+
+    for author_tuple in unique_author_tuples:
+        
+        userId = author_tuple.split("~$$$~")[0]
+        authorName = author_tuple.split("~$$$~")[1]
+        
+        user_posts = list(set(filter(lambda p: p["raw"]["userId"] == userId and
+                                                p["raw"]["authorName"] == authorName, posts)))
+        
+        user_post_ids = list(set(map(lambda p: p['post_number'], posts)))
+        
+        roster.append({ 
+            "userId":userId,
+            "authorName":authorName,
+            "posts": user_post_ids
+        })
+ 
+    print("Roster complete!")
+    return roster
+  
+#=============================================================================#
+                    
+def get_threads(posts):
+    unique_topic_ids = list(set(map(lambda p: p["raw"]["topicId"], posts)))
+    print(f"Generating {len(unique_topic_ids)} threads...")
+    threads = []
+    for tid in unique_topic_ids:
+        posts_in_thread = list(filter(lambda p: p["raw"]["topicId"] == tid, posts))
+        threads.append({
+            "topicId":int(tid),
+            "postIds":posts_in_thread
+        })
+    return threads
+
+#=============================================================================#
+                  
+def save_as_json(data,name):
+    filename = f"{name}.json"
+    with open(f"{filename}","w") as outfile:
+        outfile.write(json.dumps(data, indent=4))
+    size = round(os.path.getsize(f"{filename}")/(1024*1024), 2)
+    print(f"Saved {filename} | Size: {size}MB")
+
+        
+#=============================================================================#
+                  
+def ygWarcToJson(input_path, export_posts, export_threads, export_roster, limit = -1):
     with open(input_path, 'rb') as stream:
-        
-        print("Getting WARC records...")
-        records_array = []
-        for record in ArchiveIterator(stream):
-            uri = urlparse(record.rec_headers.get_header('WARC-Target-URI'))
-            path = uri.path
-            if "info" in path[-5:]: 
-                suffix = "info"
-            elif "raw" in path[-5:]: 
-                suffix = "raw"
-            else: suffix = "error"
-            pn_index = path.index("message/")+len("message/")
-            pn = path[pn_index:path.index(suffix)-1]
-            gn_index = path.index("group/")+len("group/")
-            gn = path[gn_index:path.index("message/")-1]
-            
-            thisRecord = {
-                "uri":uri,
-                "suffix":suffix,
-                "post_number":pn,
-                "payload":json.loads(record.raw_stream.read())
-            }
-            records_array.append(thisRecord)
+        records = parse_records(stream)
+        posts = marry_records(records,limit)
+        if export_posts == True:
+            save_as_json(posts,"posts")
+        if export_threads == True:
+            save_as_json(get_threads(posts),"threads")
+        if export_roster == True:
+            save_as_json(get_roster(posts),"roster")
+    print("Operation complete :~)")
 
-        print("Getting Unique Post IDs...")
-        op_key = "post_number"
-        msg_ids = []
-        for i in records_array:
-            msg_ids.append(i[op_key])
-        
-        print("Marrying records... (this step takes time)")
-        posts = []
-        for i in list(set(msg_ids)):
-            entry = {
-                "post_number":i,
-                "topic_id":"",
-                "info":"",
-                "raw":""
-            }
-            for j in records_array:
-                if i == j["post_number"]:
-                    if j["suffix"] == "raw":
-                        entry["raw"] = j["payload"]
-                    elif j["suffix"] == "info":
-                        entry["info"] = j["payload"]
-            entry["topic_id"] = entry["raw"]["topicId"]
-            posts.append(entry)
-        print("Record marriage complete!")
-        return posts
-    
-def getRoster(posts):
-        roster = []
-        print("Generating roster...")
-        for post in posts:
-            member = { 
-                "userId":post["raw"]["userId"],
-                "authorName":post["raw"]["authorName"],
-                "posts":[]
-            }
-            if member not in roster:
-                roster.append(member)
-        for member in roster:
-            for post in posts:
-                if post["raw"]["userId"] == member["userId"]:
-                    member["posts"].append(post["post_number"])
-        print("Roster complete!")
-        return roster
-
+#=============================================================================#
+                  
 def main():
     input_path = "./assets/june2004throughfeb2006.warc"
-    posts = ygWarcToJson(input_path)
-    roster = getRoster(posts)
     
-    with open("posts.json", "w") as outfile:
-        outfile.write(json.dumps(posts, indent=4))
-    size = os.path.getsize("posts.json")/(1024*1024)
-    print(f"Saved posts.json - {size}MB")
+    #Options
+    export_posts = True
+    export_threads = True
+    export_roster = True
+    limit = 100
     
-    with open("roster.json", "w") as outfile:
-        outfile.write(json.dumps(roster, indent=4))
-    size = os.path.getsize("roster.json")/(1024*1024)
-    print(f"Saved roster.json - {size}MB")
-    
-    print("Operation complete :~)")
-            
-main()  
+    ygWarcToJson(input_path,export_posts,export_roster,export_threads,limit)
+
+ #=============================================================================#
+
+
+main()
